@@ -1,227 +1,176 @@
-console.log(`%clist-card\n%cVersion: ${'0.0.1'}`, 'color: rebeccapurple; font-weight: bold;', '');
-
 class ListCard extends HTMLElement {
 
-    constructor() {
-      super();
-      this.attachShadow({ mode: 'open' });
+  col_map = {};
+  feed = [];
+
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+  }
+
+  setConfig(config) {
+    if (!config.entity) {
+      throw new Error('Please define an entity');
     }
 
-    setConfig(config) {
-      if (!config.entity) {
-        throw new Error('Please define an entity');
-      }
+    const root = this.shadowRoot;
+    if (root.lastChild) root.removeChild(root.lastChild);
 
-      const root = this.shadowRoot;
-      if (root.lastChild) root.removeChild(root.lastChild);
+    const cardConfig = Object.assign({}, config);
+    const columns = cardConfig.columns;
+    const card = document.createElement('ha-card');
+    const content = document.createElement('div');
+    const style = document.createElement('style');
+    style.textContent = `
+          ha-card {
+            /* sample css */
+          }
+          .entry {
+            padding: 4px;
+            margin-bottom: 10px;
+            overflow: auto;
+          }
+          .title {
+            padding: 4px;
+            font-size: 12pt;
+            font-weight: 500;
+          }
+          img {
+            width: 150px;
+            padding: 3px;
+            float: left;
+          }
+        `;
 
-      const cardConfig = Object.assign({}, config);
-      const columns = cardConfig.columns;
-      const card = document.createElement('ha-card');
-      const content = document.createElement('div');
-      const style = document.createElement('style');
-      style.textContent = `
-            ha-card {
-              /* sample css */
-            }
-            table {
-              width: 100%;
-              padding: 0 16px 16px 16px;
-            }
-            thead th {
-              text-align: left;
-            }
-            tbody tr:nth-child(odd) {
-              background-color: var(--paper-card-background-color);
-            }
-            tbody tr:nth-child(even) {
-              background-color: var(--secondary-background-color);
-            }
-            .button {
-              overflow: auto;
-              padding: 16px;
-            }
-            paper-button {
-              float: right;
-            }
-            td a {
-              color: var(--primary-text-color);
-              text-decoration-line: none;
-              font-weight: normal;
-            }
-          `;
+    // Go through columns and add CSS sytling to each column that is defined
+    if (columns) {
+      for (let column in columns) {
+        if (columns.hasOwnProperty(column) && columns[column].hasOwnProperty('style')) {
+          let styles = columns[column]['style'];
 
-      // Go through columns and add CSS sytling to each column that is defined
-      if (columns) {
-        for (let column in columns) {
-          if (columns.hasOwnProperty(column) && columns[column].hasOwnProperty('style')) {
-            let styles = columns[column]['style'];
+          style.textContent += `
+            .${columns[column].field} {`
 
-            style.textContent += `
-              .${columns[column].field} {`
-
-            for (let index in styles) {
-              if (styles.hasOwnProperty(index)) {
-                for (let s in styles[index]) {
-                  style.textContent += `
-                  ${s}: ${styles[index][s]};`;
-                }
+          for (let index in styles) {
+            if (styles.hasOwnProperty(index)) {
+              for (let s in styles[index]) {
+                style.textContent += `
+                ${s}: ${styles[index][s]};`;
               }
             }
-
-            style.textContent += `}`;
           }
+
+          style.textContent += `}`;
         }
       }
-
-      content.id = "container";
-      cardConfig.title ? card.header = cardConfig.title : null;
-      card.appendChild(content);
-      card.appendChild(style);
-      root.appendChild(card);
-      this._config = cardConfig;
     }
 
-    set hass(hass) {
-      const config = this._config;
-      const root = this.shadowRoot;
-      const card = root.lastChild;
+    content.id = "container";
+    cardConfig.title ? card.header = cardConfig.title : null;
+    card.appendChild(content);
+    card.appendChild(style);
+    root.appendChild(card);
+    this._config = cardConfig;
+  }
 
-      if (hass.states[config.entity]) {
-        const feed = config.feed_attribute ? hass.states[config.entity].attributes[config.feed_attribute] : hass.states[config.entity].attributes;
-        const columns = config.columns;
-        this.style.display = 'block';
-        const rowLimit = config.row_limit ? config.row_limit : Object.keys(feed).length;
-        let rows = 0;
+  hasValidEntry(index, field) {
+    return (
+      this.col_map.hasOwnProperty(field) && this.feed[index].hasOwnProperty(this.col_map[field].field)
+    );
+  }
 
-        if (feed !== undefined && Object.keys(feed).length > 0) {
-          let card_content = '<table><thread><tr>';
+  getFeedItemText(index, field) {
+    if (!this.col_map.hasOwnProperty(field)) {
+      return `(missing column type ${field} in configuration)`;
+    }
 
-          if (!columns) {
-            card_content += `<tr>`;
+    var item = this.feed[index];
+    var column = this.col_map[field];
 
-            for (let column in feed[0]) {
-              if (feed[0].hasOwnProperty(column)) {
-                card_content += `<th>${feed[0][column]}</th>`;
-              }
-            }
-          } else {
-            for (let column in columns) {
-              if (columns.hasOwnProperty(column)) {
-                card_content += `<th class=${columns[column].field}>${columns[column].title}</th>`;
-              }
-            }
-          }
+    if (!item.hasOwnProperty(column.field)) {
+      return `(missing field ${column.field} in feed)`;
+    }
 
-          card_content += `</tr></thead><tbody>`;
+    if (column.hasOwnProperty("add_link")) {
+      if (item.hasOwnProperty(column.add_link)) {
+        var link_href = item[column.add_link];
+        return `<a href="${link_href}" target="_blank">${item[column.field]}</a>`
+      }
+    }
 
-          for (let entry in feed) {
-            if (rows >= rowLimit) break;
+    if (column.hasOwnProperty("regex")) {
+      var newText = new RegExp(column.regex, "gs").exec(item[column.field]);
+      if (newText != null && newText.length > 0) {
+        return newText[0];
+      }
+    }
 
-            if (feed.hasOwnProperty(entry)) {
-              if (!columns) {
-                for (let field in feed[entry]) {
-                  if (feed[entry].hasOwnProperty(field)) {
-                    card_content += `<td>${feed[entry][field]}</td>`;
-                  }
-                }
-              } else {
-                let has_field = true;
+    return item[column.field];
+  }
 
-                for (let column in columns) {
-                  if (!feed[entry].hasOwnProperty(columns[column].field)) {
-                    has_field = false;
-                    break;
-                  }
-                }
+  set hass(hass) {
+    const config = this._config;
+    const root = this.shadowRoot;
+    const card = root.lastChild;
 
-                if (!has_field) continue;
-                card_content += `<tr>`;
+    if (hass.states[config.entity]) {
+      this.feed = config.feed_attribute ? hass.states[config.entity].attributes[config.feed_attribute] : hass.states[config.entity].attributes;
+      const columns = config.columns;
+      this.style.display = 'block';
+      const rowLimit = config.row_limit ? config.row_limit : Object.keys(feed).length;
+      let rows = 0;
 
-                for (let column in columns) {
-                  if (columns.hasOwnProperty(column)) {
-                    card_content += `<td class=${columns[column].field}>`;
+      console.log("NewsCard v.0.0.2");
+      console.log(
+        hass.states[config.entity].attributes['friendly_name']
+      );
 
-                    if (columns[column].hasOwnProperty('add_link')) {
-                      card_content +=  `<a href="${feed[entry][columns[column].add_link]}" target='_blank'>`;
-                    }
+      this.col_map = {};
+      for (let c in columns) {
+        this.col_map[columns[c].type] = columns[c];
+      }
 
-                    if (columns[column].hasOwnProperty('type')) {
-                      if (columns[column].type === 'image') {
-                        if (columns[column].hasOwnProperty('width')) {
-                          var image_width = columns[column].width;
-                        } else {
-                          var image_width = 70;
-                        }
-                        if (columns[column].hasOwnProperty('height')) {
-                          var image_height = columns[column].height;
-                        } else {
-                          var image_height = 90;
-                        }
-                        if (feed[entry][columns[column].field][0].hasOwnProperty('url')) {
-                            var url = feed[entry][columns[column].field][0].url
-                        } else {
-                          var url = feed[entry][columns[column].field]
-                        }
-                          card_content += `<img id="image" src="${url}" width="${image_width}" height="${image_height}">`;
-                      } else if (columns[column].type === 'icon') {
-                        card_content += `<ha-icon class="column-${columns[column].field}" icon=${feed[entry][columns[column].field]}></ha-icon>`;
-                      }
-                      // else if (columns[column].type === 'button') {
-                      //   card_content += `<paper-button raised>${feed[entry][columns[column].button_text]}</paper-button>`;
-                      // }
-                    } else {
-                      let newText = feed[entry][columns[column].field];
+      if (this.feed !== undefined && Object.keys(this.feed).length > 0) {
+        let card_content = '<div class="news-card-news">';
 
-                      if (columns[column].hasOwnProperty('regex')) {
-                        newText = new RegExp(columns[column].regex, 'u').exec(feed[entry][columns[column].field]);
-                      } 
-                      if (columns[column].hasOwnProperty('prefix')) {
-                        newText = columns[column].prefix + newText;
-                      } 
-                      if (columns[column].hasOwnProperty('postfix')) {
-                        newText += columns[column].postfix;
-                      }
+        console.log(this.col_map);
 
-                      card_content += `${newText}`;
-                    }
+        for (let item in this.feed)
+        {
+          if (rows++ >= rowLimit) break;
 
-                    if (columns[column].hasOwnProperty('add_link')) {
-                      card_content +=  `</a>`;
-                    }
+          let entry = '<div class="entry">';
 
-                    card_content += `</td>`;
-                  }
-                }
-              }
+          // title
+          entry += `<div class="title">${this.getFeedItemText(item, "title")}</div>`;
 
-              card_content += `</tr>`;
-              ++rows;
-            }
-          }
+          // summary
+          entry += '<div class="summary">'
+          // image
+          if (this.hasValidEntry(item, "image"))
+            entry += `<img src="${this.getFeedItemText(item, "image")}" />`;
+          // text
+          entry += this.getFeedItemText(item, "summary");
+          entry += '</div>'
 
-          root.lastChild.hass = hass;
-          card_content += `</tbody></table>`;
-          root.getElementById('container').innerHTML = card_content;
-        } else {
-          this.style.display = 'none';
+          entry += '</div>'
+          card_content += entry;
         }
+
+        root.lastChild.hass = hass;
+        card_content += `</div>`;
+        root.getElementById('container').innerHTML = card_content;
       } else {
         this.style.display = 'none';
       }
-    }
-
-    getCardSize() {
-      return 1;
+    } else {
+      this.style.display = 'none';
     }
   }
 
-  customElements.define('list-card', ListCard);
+  getCardSize() {
+    return 1;
+  }
+}
 
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "list-card",
-  name: "List Card",
-  preview: false,
-  description: "The List Card generate table with data from sensor that provides data as a list of attributes."
-});
+  customElements.define('list-card', ListCard);
